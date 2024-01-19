@@ -320,25 +320,3 @@ class E2EVarNet(nn.Module):
         rss = torch.sqrt(torch.sum(transformed ** 2, dim = 1, keepdim = True))
 
         return rss
-
-# Define the dimensions of the fake data
-batch_size = 3
-num_channels = 12
-xdim = 160
-ydim = 218
-
-# Create fake input data
-fake_input = torch.randn((batch_size, num_channels, xdim, ydim))
-
-# Create a mask tensor
-mask = torch.randint(0, 2, (batch_size, num_channels, xdim, ydim), dtype=torch.bool)
-
-# Instantiate your E2EVarNet model
-test_model = E2EVarNet()
-
-# Forward pass with the fake data
-output = test_model(fake_input, mask)
-
-# Print the output shape
-print("Output shape:", output.shape)
-
