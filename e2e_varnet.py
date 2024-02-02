@@ -1,21 +1,24 @@
 from torch import nn
 import torch
 import torch.nn.functional as F
+from mask import get_masked_indices
+import matplotlib.pyplot as plt
+import numpy as np
 
-def cmplx_to_re(batch):
-    # Assumes batch has shape [batch, channels, xdim, ydim]
-    b, c, x, y = batch.shape
-    cp = torch.empty((b, c * 2, x, y))
+def cmplx_to_re(batch, device):
+    # Assumes batch has shape [batch, channels, height, width]
+    b, c, h, w = batch.shape
+    cp = torch.empty((b, c * 2, h, w))
     re, im = torch.real(batch), torch.imag(batch)
     cp[:, ::2, :, :] = re
     cp[:, 1::2, :, :] = im
 
-    return cp
+    return cp.to(device)
 
-def re_to_cmplx(batch):
+def re_to_cmplx(batch, device):
     batch = batch[:, ::2, :, :] +1j * batch[:, 1::2, :, :]
 
-    return batch
+    return batch.to(device)
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -40,15 +43,18 @@ class ConvTransposeBlock(nn.Module):
         super().__init__()
 
         self.conv_transpose = nn.ConvTranspose2d(in_channels, out_channels, kernel_size = 2, stride = 2)
-        self.conv1 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, padding = 1)
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size = 3, padding = 1)
         self.relu = nn.ReLU()
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, padding = 1)
     
     def forward(self, x, stored):
         x = self.conv_transpose(x)
-        x = torch.add(x, stored)
+        x = torch.cat([x, stored], dim = 1) 
         x = self.relu(x)
         x = self.conv1(x)
         x = self.relu(x)
+        x = self.conv2(x)
+        x - self.relu(x)
         
         return x
 
@@ -92,7 +98,7 @@ class UNet(nn.Module):
         self.bottleneck = nn.Sequential(nn.Conv2d(ch_cnt, ch_cnt * 2, kernel_size = 3, padding = 1),
                                         nn.ReLU(),
                                         nn.Conv2d(ch_cnt * 2, ch_cnt * 2, kernel_size = 3, padding = 1),
-                                        nn.ReLU()) # Change as currently downsamples
+                                        nn.ReLU()) 
         ch_cnt *= 2
 
         # Decoder:
@@ -108,26 +114,30 @@ class UNet(nn.Module):
         self.final_conv = nn.Conv2d(ch_cnt, out_channels, kernel_size = 1, padding = 0)
     
     def pad(self, input):
-        # Assumes input dimensions [batch, channels, xdim, ydim]
-        xdim_s = input.shape[2]
-        ydim_s = input.shape[3]
-        to_pad_xdim = (2 ** self.depth) - (xdim_s % (2 ** self.depth)) 
-        to_pad_ydim = (2 ** self.depth) - (ydim_s % (2 ** self.depth))
+        # Assumes input dimensions [batch, channels, height, width]
+        height_dim_s = input.shape[2]
+        width_dim_s = input.shape[3]
+        to_pad_height = (2 ** self.depth) - (height_dim_s % (2 ** self.depth)) 
+        to_pad_width = (2 ** self.depth) - (width_dim_s % (2 ** self.depth))
 
-        to_pad = (0, to_pad_ydim, 0, to_pad_xdim)
+        to_pad = (0, to_pad_width, 0, to_pad_height)
+        # DOuble check int vs complex zero-padding
         padded = F.pad(input, to_pad, "constant", 0) # Currently zero-padding, could consider reflection though
-        return padded, xdim_s, ydim_s
+        return padded, height_dim_s, width_dim_s
     
-    def unpad(self, input, xdim, ydim):
-        # Assumes input dimensions [batch, channels, xdim, ydim]
-        return input[:, :, :xdim, :ydim]
+    def unpad(self, input, height, width):
+        # Assumes input dimensions [batch, channels, height, width]
+        return input[:, :, :height, :width]
 
-    def forward(self, input : torch.tensor):
-        # Assumes input dimensions [batch, channels, xdim, ydim], where channels = 1 and xdim and ydim are complex-valued
+    def forward(self, input : torch.tensor, device):
+        # Assumes input dimensions [batch, channels, height, width], where channels = 1 and height and width are complex-valued
         
-        padded, xdim_s, ydim_s = self.pad(input)
+        padded, hdim_s, wdim_s = self.pad(input)
 
-        padded = cmplx_to_re(padded)
+        padded = cmplx_to_re(padded, device)
+
+        for_scale = torch.max(torch.abs(padded))
+        padded = padded / for_scale
         
         track, out1 = self.enc1(padded)
         track, out2 = self.enc2(track)
@@ -142,9 +152,11 @@ class UNet(nn.Module):
 
         out = self.final_conv(track)
 
-        out = re_to_cmplx(out)
+        out = out * for_scale
 
-        out = self.unpad(out, xdim_s, ydim_s)
+        out = re_to_cmplx(out, device)
+
+        out = self.unpad(out, hdim_s, wdim_s)
 
         return out
 
@@ -155,6 +167,7 @@ class Refinement(nn.Module):
 
     def __init__(
         self,
+        device
     ):
         '''
         Arguments:
@@ -162,7 +175,7 @@ class Refinement(nn.Module):
 
         '''
         super().__init__()
-
+        self.device = device
         self.unet = UNet(16, 2, 2)
     
     def forward(self, input, sens_maps):
@@ -175,8 +188,8 @@ class Refinement(nn.Module):
             Estimated sensitivity profiles
         '''
 
-        # Assumes undersampled, unnormalized input of [batch, channels, xdim, ydim]
-        # Assumes sens_maps of dimension [batch, channels, xdim, ydim]
+        # Assumes undersampled, unnormalized input of [batch, channels, height, width]
+        # Assumes sens_maps of dimension [batch, channels, height, width]
 
         # Shift
         shifted = torch.fft.ifftshift(input, dim = (2, 3))
@@ -191,7 +204,7 @@ class Refinement(nn.Module):
         reduced = torch.sum(reduced, dim = 1, keepdim = True)
 
         # U-Net
-        unet_pass = self.unet(reduced)
+        unet_pass = self.unet(reduced, self.device)
 
         # Expand
         expanded = sens_maps * unet_pass
@@ -204,22 +217,25 @@ class SME(nn.Module):
     '''
 
     def __init__(
-        self
+        self,
+        device
     ):
         super().__init__()
 
+        self.device = device
         self.unet = UNet(8, 24, 24)
     
     def forward(self, input):
 
-        b, c, xd, yd = input.shape
+        b, c, hd, wd = input.shape
 
         # ACS Mask
-        acs_mask = torch.zeros((b, c, xd, yd), dtype = torch.bool)
-        zeros = torch.zeros((b, c, xd, yd), dtype = torch.complex64)
+        acs_mask = torch.zeros((b, c, hd, wd), dtype = torch.bool).to(self.device)
+        zeros = torch.zeros((b, c, hd, wd), dtype = torch.complex64).to(self.device)
         square_size = 20
-        start_x = (xd - square_size) // 2
-        acs_mask[:, :, start_x:start_x + square_size, :] = True 
+        start_h = (hd - square_size) // 2
+        start_w = (wd - square_size) // 2
+        acs_mask[:, :, start_h:start_h + square_size, start_w:start_w + square_size] = True 
         masked = torch.where(acs_mask, input, zeros)
 
         # Shift
@@ -229,8 +245,8 @@ class SME(nn.Module):
         transformed = torch.fft.ifft2(shifted, dim = (2, 3))
 
         # U-Net
-        unet_pass = self.unet(transformed)
-        # unet_pass should have dimensions [batch, channels = 12, xdim, ydim]
+        unet_pass = self.unet(transformed, self.device)
+        # unet_pass should have dimensions [batch, channels = 12, height, width]
 
         # Division by RSS (Normalization)
         rss = torch.sqrt(torch.sum(unet_pass ** 2, dim = 1, keepdim = True))
@@ -248,7 +264,7 @@ class DC(nn.Module):
 
         self.weight = nn.Parameter(torch.ones(1))
 
-    def forward(self, current : torch.Tensor, ref : torch.Tensor):
+    def forward(self, current : torch.Tensor, ref : torch.Tensor, us_mask : torch.Tensor):
         '''
         Parameters
         ----------
@@ -260,11 +276,8 @@ class DC(nn.Module):
 
         combined = current - ref
         zeros = torch.zeros_like(combined, dtype = torch.complex64)
-        mask = torch.zeros_like(combined, dtype = torch.bool)
-        square_size = 20
-        start_x = (combined.shape[2] - square_size) // 2
-        mask[:, :, start_x:start_x + square_size, :] = True 
-        masked = torch.where(mask, combined, zeros)
+        masked = torch.where(us_mask, combined, zeros)
+        masked *= self.weight
         return masked 
 
 class E2EVarNet(nn.Module):
@@ -273,23 +286,47 @@ class E2EVarNet(nn.Module):
     '''
 
     def __init__(
-        self
+        self,
+        device
     ):
         super().__init__()
 
-        self.refinement1 = Refinement()
-        self.dc1 = DC()
-        self.refinement2 = Refinement()
-        self.dc2 = DC()
-        self.refinement3 = Refinement()
-        self.dc3 = DC()
-        self.refinement4 = Refinement()
-        self.dc4 = DC()
-        self.sme = SME()
-        
+        self.device = device
 
-    def forward(self, input, mask : torch.Tensor):
-        # Input assumed to be [batch, channels = 12, xdim, ydim] 
+        self.refinement1 = Refinement(self.device)
+        self.dc1 = DC()
+        self.refinement2 = Refinement(self.device)
+        self.dc2 = DC()
+        self.refinement3 = Refinement(self.device)
+        self.dc3 = DC()
+        self.refinement4 = Refinement(self.device)
+        self.dc4 = DC()
+        self.sme = SME(self.device)
+        
+    def apply_undersampling_mask(self, input):
+        '''
+        Applies the passed undersampling mask to input k-space
+        '''
+
+        b, c, h, w = input.shape
+
+        mask = torch.zeros((b, c, h, w), dtype = torch.bool).to(self.device)
+        zeros = torch.zeros((b, c, h, w), dtype = torch.complex64).to(self.device)
+        square_size = 20
+        start_h = (h - square_size) // 2
+        start_w = (w - square_size) // 2
+        mask[:, :, start_h:start_h + square_size, start_w:start_w + square_size] = True 
+        mask[:, :, get_masked_indices(), 0:(int(w * 0.85))] = True
+        masked = torch.where(mask, input, zeros)
+
+        return masked, mask
+
+
+    def forward(self, input):
+        # Input assumed to be [batch, channels = 12, height, width] 
+
+        # Undersample input
+        input, us_mask = self.apply_undersampling_mask(input)
 
         # Generate estimated sensitivity maps
         sens_map_est = self.sme(input)
@@ -299,16 +336,16 @@ class E2EVarNet(nn.Module):
         current_kspace = input
 
         # Block 1
-        current_kspace = current_kspace - self.dc1(current_kspace, ref) + self.refinement1(current_kspace, sens_map_est)
+        current_kspace = current_kspace - self.dc1(current_kspace, ref, us_mask) + self.refinement1(current_kspace, sens_map_est)
 
         # Block 2
-        current_kspace = current_kspace - self.dc2(current_kspace, ref) + self.refinement2(current_kspace, sens_map_est)
+        current_kspace = current_kspace - self.dc2(current_kspace, ref, us_mask) + self.refinement2(current_kspace, sens_map_est)
 
         # Block 3
-        current_kspace = current_kspace - self.dc3(current_kspace, ref) + self.refinement3(current_kspace, sens_map_est)
+        current_kspace = current_kspace - self.dc3(current_kspace, ref, us_mask) + self.refinement3(current_kspace, sens_map_est)
 
         # Block 4
-        current_kspace = current_kspace - self.dc4(current_kspace, ref) + self.refinement4(current_kspace, sens_map_est)
+        current_kspace = current_kspace - self.dc4(current_kspace, ref, us_mask) + self.refinement4(current_kspace, sens_map_est)
 
         # Shift
         shifted = torch.fft.ifftshift(current_kspace, dim = (2, 3))
@@ -319,4 +356,8 @@ class E2EVarNet(nn.Module):
         # RSS (to generate final reconstructed images)
         rss = torch.sqrt(torch.sum(transformed ** 2, dim = 1, keepdim = True))
 
-        return rss
+        mag = torch.abs(rss)
+
+        norm_mag = torch.nn.functional.normalize(mag, dim = (2, 3))
+
+        return norm_mag
