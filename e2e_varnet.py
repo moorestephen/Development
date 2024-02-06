@@ -93,6 +93,8 @@ class UNet(nn.Module):
         ch_cnt *= 2
         self.enc4 = ConvBlock(ch_cnt, ch_cnt * 2)
         ch_cnt *= 2
+        self.enc5 = ConvBlock(ch_cnt, ch_cnt * 2)
+        ch_cnt *= 2
 
         # Bottleneck:
         self.bottleneck = nn.Sequential(nn.Conv2d(ch_cnt, ch_cnt * 2, kernel_size = 3, padding = 1),
@@ -102,6 +104,8 @@ class UNet(nn.Module):
         ch_cnt *= 2
 
         # Decoder:
+        self.dec5 = ConvTransposeBlock(ch_cnt, ch_cnt // 2)
+        ch_cnt //= 2
         self.dec4 = ConvTransposeBlock(ch_cnt, ch_cnt // 2)
         ch_cnt //= 2
         self.dec3 = ConvTransposeBlock(ch_cnt, ch_cnt // 2)
@@ -143,8 +147,10 @@ class UNet(nn.Module):
         track, out2 = self.enc2(track)
         track, out3 = self.enc3(track)
         track, out4 = self.enc4(track)
+        track, out5 = self.enc5(track)
 
         track = self.bottleneck(track)
+        track = self.dec5(track, out5)
         track = self.dec4(track, out4)
         track = self.dec3(track, out3)
         track = self.dec2(track, out2)
@@ -176,7 +182,7 @@ class Refinement(nn.Module):
         '''
         super().__init__()
         self.device = device
-        self.unet = UNet(16, 2, 2)
+        self.unet = UNet(8, 2, 2)
     
     def forward(self, input, sens_maps):
         '''
@@ -223,7 +229,7 @@ class SME(nn.Module):
         super().__init__()
 
         self.device = device
-        self.unet = UNet(8, 24, 24)
+        self.unet = UNet(24, 24, 24)
     
     def forward(self, input):
 
@@ -403,3 +409,9 @@ class E2EVarNet(nn.Module):
         norm_mag = mag / norm_scale
 
         return norm_mag
+    
+    
+model = E2EVarNet('cuda')
+# model.summary()
+params = sum(p.numel() for p in model.parameters())
+print(f"Total number of parameters: {params}")
