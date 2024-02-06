@@ -2,7 +2,7 @@ from torch import nn
 import torch
 import torch.nn.functional as F
 from mask import get_masked_indices
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import numpy as np
 
 def cmplx_to_re(batch, device):
@@ -301,6 +301,14 @@ class E2EVarNet(nn.Module):
         self.dc3 = DC()
         self.refinement4 = Refinement(self.device)
         self.dc4 = DC()
+        self.refinement5 = Refinement(self.device)
+        self.dc5 = DC()
+        self.refinement6 = Refinement(self.device)
+        self.dc6 = DC()
+        self.refinement7 = Refinement(self.device)
+        self.dc7 = DC()
+        self.refinement8 = Refinement(self.device)
+        self.dc8 = DC()
         self.sme = SME(self.device)
         
     def apply_undersampling_mask(self, input):
@@ -347,6 +355,18 @@ class E2EVarNet(nn.Module):
         # Block 4
         current_kspace = current_kspace - self.dc4(current_kspace, ref, us_mask) + self.refinement4(current_kspace, sens_map_est)
 
+        # Block 5
+        current_kspace = current_kspace - self.dc5(current_kspace, ref, us_mask) + self.refinement5(current_kspace, sens_map_est)
+
+        # Block 6
+        current_kspace = current_kspace - self.dc6(current_kspace, ref, us_mask) + self.refinement6(current_kspace, sens_map_est)
+
+        # Block 7
+        current_kspace = current_kspace - self.dc7(current_kspace, ref, us_mask) + self.refinement7(current_kspace, sens_map_est)
+
+        # Block 8
+        current_kspace = current_kspace - self.dc8(current_kspace, ref, us_mask) + self.refinement8(current_kspace, sens_map_est)
+
         # Shift
         shifted = torch.fft.ifftshift(current_kspace, dim = (2, 3))
 
@@ -358,6 +378,8 @@ class E2EVarNet(nn.Module):
 
         mag = torch.abs(rss)
 
-        norm_mag = torch.nn.functional.normalize(mag, dim = (2, 3))
+        # norm_mag = torch.nn.functional.normalize(mag, dim = (2, 3))
+        norm_scale = torch.max(torch.abs(mag))
+        norm_mag = mag / norm_scale
 
         return norm_mag
