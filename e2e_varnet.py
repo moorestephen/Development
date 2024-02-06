@@ -309,6 +309,14 @@ class E2EVarNet(nn.Module):
         self.dc7 = DC()
         self.refinement8 = Refinement(self.device)
         self.dc8 = DC()
+        self.refinement9 = Refinement(self.device)
+        self.dc9 = DC()
+        self.refinement10 = Refinement(self.device)
+        self.dc10 = DC()
+        self.refinement11 = Refinement(self.device)
+        self.dc11 = DC()
+        self.refinement12 = Refinement(self.device)
+        self.dc12 = DC()
         self.sme = SME(self.device)
         
     def apply_undersampling_mask(self, input):
@@ -366,6 +374,18 @@ class E2EVarNet(nn.Module):
 
         # Block 8
         current_kspace = current_kspace - self.dc8(current_kspace, ref, us_mask) + self.refinement8(current_kspace, sens_map_est)
+
+        # Block 5
+        current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
+
+        # Block 6
+        current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
+
+        # Block 7
+        current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
+
+        # Block 8
+        current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
 
         # Shift
         shifted = torch.fft.ifftshift(current_kspace, dim = (2, 3))
