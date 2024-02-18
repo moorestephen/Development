@@ -337,8 +337,8 @@ class E2EVarNet(nn.Module):
         square_size = 20
         start_h = (h - square_size) // 2
         start_w = (w - square_size) // 2
-        mask[:, :, start_h:start_h + square_size, start_w:start_w + square_size] = True 
-        mask[:, :, get_masked_indices(), 0:(int(w * 0.85))] = True
+        mask[:, :, :, get_masked_indices()] = True 
+        mask[:, :, :, (int(w * 0.85)):] = False
         masked = torch.where(mask, input, zeros)
 
         return masked, mask
