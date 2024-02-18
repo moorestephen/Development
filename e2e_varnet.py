@@ -82,7 +82,7 @@ class UNet(nn.Module):
 
         super().__init__()
 
-        self.depth = 4 # For reference, will hopefully make this modifiable
+        self.depth = 5 # For reference, will hopefully make this modifiable
 
         # Encoder:
         ch_cnt = chans
@@ -381,16 +381,16 @@ class E2EVarNet(nn.Module):
         # Block 8
         current_kspace = current_kspace - self.dc8(current_kspace, ref, us_mask) + self.refinement8(current_kspace, sens_map_est)
 
-        # Block 5
+        # Block 9
         current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
 
-        # Block 6
+        # Block 10
         current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
 
-        # Block 7
+        # Block 11
         current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
 
-        # Block 8
+        # Block 12
         current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
 
         # Shift
@@ -409,9 +409,3 @@ class E2EVarNet(nn.Module):
         norm_mag = mag / norm_scale
 
         return norm_mag
-    
-    
-model = E2EVarNet('cuda')
-# model.summary()
-params = sum(p.numel() for p in model.parameters())
-print(f"Total number of parameters: {params}")
