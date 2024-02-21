@@ -25,6 +25,8 @@ class ConvBlock(nn.Module):
         super().__init__()
 
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size = 3, padding = 1)
+        self.inorm = nn.InstanceNorm2d(out_channels)
+        self.bnorm = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, padding = 1)
         self.maxpool = nn.MaxPool2d(kernel_size = 2, stride = 2)
@@ -32,8 +34,12 @@ class ConvBlock(nn.Module):
     def forward(self, x):
         x = self.conv1(x)
         x = self.relu(x)
+        x = self.inorm(x)
+        # x = self.bnorm(x)
         x = self.conv2(x)
         x = self.relu(x)
+        x = self.inorm(x)
+        # x = self.bnorm(x)
         store = x
         x = self.maxpool(x)
         return x, store
@@ -44,8 +50,11 @@ class ConvTransposeBlock(nn.Module):
 
         self.conv_transpose = nn.ConvTranspose2d(in_channels, out_channels, kernel_size = 2, stride = 2)
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size = 3, padding = 1)
+        self.inorm = nn.InstanceNorm2d(out_channels)
+        self.bnorm = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
         self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size = 3, padding = 1)
+
     
     def forward(self, x, stored):
         x = self.conv_transpose(x)
@@ -53,8 +62,12 @@ class ConvTransposeBlock(nn.Module):
         x = self.relu(x)
         x = self.conv1(x)
         x = self.relu(x)
+        x = self.inorm(x)
+        # x = self.bnorm(x)
         x = self.conv2(x)
         x - self.relu(x)
+        x = self.inorm(x)
+        # x = self.bnorm(x)
         
         return x
 
@@ -238,10 +251,10 @@ class SME(nn.Module):
         # ACS Mask
         acs_mask = torch.zeros((b, c, hd, wd), dtype = torch.bool).to(self.device)
         zeros = torch.zeros((b, c, hd, wd), dtype = torch.complex64).to(self.device)
-        square_size = 20
-        start_h = (hd - square_size) // 2
-        start_w = (wd - square_size) // 2
-        acs_mask[:, :, start_h:start_h + square_size, start_w:start_w + square_size] = True 
+        # square_size = 20
+        # start_h = (hd - square_size) // 2
+        # start_w = (wd - square_size) // 2
+        acs_mask[:, :, :, 77:105] = True 
         masked = torch.where(acs_mask, input, zeros)
 
         # Shift
@@ -381,17 +394,17 @@ class E2EVarNet(nn.Module):
         # Block 8
         current_kspace = current_kspace - self.dc8(current_kspace, ref, us_mask) + self.refinement8(current_kspace, sens_map_est)
 
-        # Block 9
-        current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
+        # # Block 9
+        # current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
 
-        # Block 10
-        current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
+        # # Block 10
+        # current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
 
-        # Block 11
-        current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
+        # # Block 11
+        # current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
 
-        # Block 12
-        current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
+        # # Block 12
+        # current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
 
         # Shift
         shifted = torch.fft.ifftshift(current_kspace, dim = (2, 3))
@@ -406,6 +419,6 @@ class E2EVarNet(nn.Module):
 
         # norm_mag = torch.nn.functional.normalize(mag, dim = (2, 3))
         norm_scale = torch.max(torch.abs(mag))
-        norm_mag = mag / norm_scale
+        norm_mag = torch.div(mag, norm_scale)
 
         return norm_mag

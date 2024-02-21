@@ -30,7 +30,8 @@ def get_masked_indices():
     for i in range(77, 105):
         list.append(i)
     for i in range(105, 170):
-        list.append(i)
+        if i % 2 == 0:
+            list.append(i)
     
     samples = np.array(list)
 

@@ -6,7 +6,7 @@ import os
 from torch.utils.data import random_split, Dataset, DataLoader, ConcatDataset
 import random
 import torch.optim as optim
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from natsort import natsorted
 
 def get_target(input_file : str, target_data : str):
@@ -152,6 +152,10 @@ class MDSC508_Dataset(Dataset):
         # FOR DEBUGGING
         input_data = input_data[:, :, :170]
 
+        input_max = torch.max(torch.abs(torch.view_as_real(input_data)))
+
+        input_data = torch.div(input_data, input_max)
+
         # fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(12, 16))
         # input_data_idx = 0
         # for i in range(4):
@@ -190,11 +194,16 @@ class MDSC508_Dataset(Dataset):
         c, h, w = mag.shape
         mag = mag.view(c, h, w) # Reshape mag to be compatible with model dimension order (oops)
 
-        mag = mag[:, :, :170] # FOR DEBUGGING
+        ind_l = (w - 170) // 2
+        ind_r = ind_l + 170
 
-        norm_mag = torch.nn.functional.normalize(mag, dim = (1, 2))      
+        mag = mag[:, :, ind_l:ind_r] # FOR DEBUGGING
 
-        return mag
+        # norm_mag = torch.nn.functional.normalize(mag, dim = (1, 2))   
+        norm_scale = torch.max(torch.abs(mag))
+        norm_mag = torch.div(mag, norm_scale)
+
+        return norm_mag
     
     def __getitem__(self, index):
         to_return = {
