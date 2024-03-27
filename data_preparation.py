@@ -37,6 +37,7 @@ def get_patient_ids(data : list):
     for file in data:
         if not file.split("_")[1] in to_return:
             to_return.append(file.split("_")[1])
+    print(f'Number of patient IDs found: {len(to_return)}')
     return(to_return)
 
 def load_file_data(folder : str, file : str) -> np.ndarray:
@@ -86,7 +87,7 @@ def subset_data_by_patient_id(data : list) -> list:
         for x in data:
             if id in x:
                 slices.append(x)
-        dic[id] = natsorted(slices)[55:201]
+        dic[id] = natsorted(slices)[55:200]
     return(dic)
 
 def get_slices_from_ids(ids: list, id_slice_dic : dict) -> list:
@@ -138,9 +139,7 @@ class MDSC508_Dataset(Dataset):
             Undersampled magnitude image
         '''
 
-
-
-        input_data = torch.tensor(load_file_data(self.input_path, self.slices[slice_index]))
+        input_data = torch.from_numpy(load_file_data(self.input_path, self.slices[slice_index]))
         # print(f'Input data shape: {input_data.shape}')
         
         input_data = input_data.permute(2, 0, 1)
@@ -149,8 +148,11 @@ class MDSC508_Dataset(Dataset):
 
         # print(f'Reshaped tensor shape: {input_data.shape}')
 
-        # FOR DEBUGGING
-        input_data = input_data[:, :, :170]
+        if input_data.shape[2] != 170:
+            transformed = torch.fft.ifft2(torch.fft.ifftshift(input_data, dim = (1, 2)), dim = (1, 2))
+            off = (input_data.shape[2] - 170) // 2
+            cropped = transformed[:, :, off:-off]
+            input_data = torch.fft.fftshift(torch.fft.fft2(cropped, dim = (1, 2)), dim = (1, 2))
 
         input_max = torch.max(torch.abs(torch.view_as_real(input_data)))
 
@@ -172,7 +174,7 @@ class MDSC508_Dataset(Dataset):
         # plt.show()
         
         return input_data
-    
+
     def process_target(self, slice_index : int) -> torch.Tensor:
         '''
         Helper function which processes the target for a slice query
@@ -188,7 +190,7 @@ class MDSC508_Dataset(Dataset):
             Target magnitude image
         '''
 
-        target_data = torch.tensor(load_file_data(self.target_path, get_target(self.slices[slice_index], self.target_data)))
+        target_data = torch.from_numpy(load_file_data(self.target_path, get_target(self.slices[slice_index], self.target_data)))
 
         mag = torch.abs(target_data) # Get magnitude data for comparison
         c, h, w = mag.shape
@@ -197,9 +199,8 @@ class MDSC508_Dataset(Dataset):
         ind_l = (w - 170) // 2
         ind_r = ind_l + 170
 
-        mag = mag[:, :, ind_l:ind_r] # FOR DEBUGGING
-
-        # norm_mag = torch.nn.functional.normalize(mag, dim = (1, 2))   
+        mag = mag[:, :, ind_l:ind_r] 
+ 
         norm_scale = torch.max(torch.abs(mag))
         norm_mag = torch.div(mag, norm_scale)
 
@@ -211,6 +212,114 @@ class MDSC508_Dataset(Dataset):
             'target' : self.process_target(index)
         }
         return to_return
+
+tvl_splits = {
+    'test': ['e17391s3_P10752', 'e17447s3_P13824', 'e17406s3_P01536', 'e17390s3_P03584', 
+    'e17322s3_P19968', 'e17353s3_P08704', 'e17474s3_P12288', 'e17315s3_P58368', 'e17647s3_P03584'],
+    'validate' : ['e17565s3_P30720', 'e17349s6_P15360', 'e17595s3_P19968', 'e17396s3_P13824', 
+    'e17614s3_P15872', 'e17410s3_P37888'],
+    'train' : ['e17573s3_P31232', 'e17757s3_P15360', 'e17385s3_P03584', 'e17448s3_P20992', 
+    'e17264s9_P25600', 'e17658s3_P03584', 'e17282s3_P28160', 'e17758s4_P22528', 'e17559s3_P24064', 
+    'e17346s3_P42496', 'e17660s3_P01536', 'e17600s3_P03584', 'e17786s3_P12800', 'e17785s3_P05632', 
+    'e17626s3_P12800', 'e17420s3_P07680', 'e17609s3_P27136', 'e17424s3_P10240', 'e17431s3_P23040', 
+    'e17638s3_P11776', 'e17756s3_P08704', 'e17480s3_P19968', 'e17553s3_P20480', 'e17307s3_P03584']
+}
+
+def get_gbm_filenames(file_names, data_path):
+    paths = []
+    # for file in os.listdir(data_path):
+    #     if file[0:15] in file_names:
+    #         paths.append(os.path.join(data_path, file))
+    #     else:
+    #         print(f'{file} was requested but not found in any of the TVL splits!')
+    for scan in file_names:
+        # scan_paths = [os.path.join(data_path, path) for path in os.listdir(data_path) if scan in os.listdir(data_path)]
+        scan_paths = []
+        for file in os.listdir(data_path):
+            if scan in file:
+                scan_paths.append(os.path.join(data_path, file))
+        scan_paths = natsorted(scan_paths)
+        scan_paths = scan_paths[8:153] # Take only central 145
+        paths.extend(scan_paths)
+    return paths
+
+class GBMDataset(Dataset):
+    '''
+    INSERT DESCRIPTION
+    '''
+    
+    def __init__(self, data_directory, scan_names : list, proportion : float = 1.0):
+        '''
+        Initialize GBM Dataset
+
+        Parameters
+        ----------
+        data_directory : 
+            Path to the directory which contains 'InputData' and 'TargetData' subdirectories 
+        scan_names : list
+            List of the scan names to include in the dataset. 
+        proportion : float
+            Proportion of the total slices to include in the dataset to be initialized. Defaults
+            to 1.0 (i.e., all)
+        '''
+
+        self.inputDirectory = os.path.join(data_directory + '/InputData/')
+        self.targetDirectory = os.path.join(data_directory + '/TargetData/')
+
+        self.input_file_paths = get_gbm_filenames(scan_names, self.inputDirectory)
+        self.input_file_paths = natsorted(self.input_file_paths)
+
+        select_every = int(1 / proportion)
+
+        self.input_file_paths = self.input_file_paths[::select_every]
+
+    def __len__(self):
+        return len(self.input_file_paths)
+
+    def process_input(self, index) -> torch.Tensor:
+        '''
+
+        Parameters
+        ----------
+        
+        Returns
+        -------
+
+        '''
+
+        filename = self.input_file_paths[index]
+        input_data = torch.from_numpy(np.load(filename))
+        input_data = input_data.permute(2, 0, 1)
+        input_max = torch.max(torch.abs(torch.view_as_real(input_data)))
+        input_data = torch.div(input_data, input_max)       
+        return filename, input_data
+
+    def process_target(self, input_filename) -> torch.Tensor:
+        '''
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        '''
+
+        target_data = torch.from_numpy(np.load(input_filename.replace('Input', 'Target')))
+        mag = torch.abs(target_data) # Get magnitude data for comparison
+        mag = mag.view(1, 218, 170)
+        norm_scale = torch.max(torch.abs(mag))
+        norm_mag = torch.div(mag, norm_scale)
+        return norm_mag
+
+    def __getitem__(self, index):
+        input_filename, input_data = self.process_input(index)
+        # print(input_filename)
+        to_return = {
+            'input': input_data,
+            'target' : self.process_target(input_filename)
+        }
+        return to_return
+
 
 def build_exp_ds(patho_ratio, train_ids, val_ids, test_ids, patient_id_groups, input_path, target_path):
     '''

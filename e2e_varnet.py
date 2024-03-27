@@ -153,8 +153,8 @@ class UNet(nn.Module):
 
         padded = cmplx_to_re(padded, device)
 
-        for_scale = torch.max(torch.abs(padded))
-        padded = padded / for_scale
+        # for_scale = torch.max(torch.abs(padded))
+        # padded = padded / for_scale
         
         track, out1 = self.enc1(padded)
         track, out2 = self.enc2(track)
@@ -171,7 +171,7 @@ class UNet(nn.Module):
 
         out = self.final_conv(track)
 
-        out = out * for_scale
+        # out = out * for_scale
 
         out = re_to_cmplx(out, device)
 
@@ -228,7 +228,13 @@ class Refinement(nn.Module):
         # Expand
         expanded = sens_maps * unet_pass
 
-        return expanded
+        # FFT Transform
+        image_transformed = torch.fft.fft2(expanded, dim = (2, 3))
+
+        # FFT Shift
+        image_shifted = torch.fft.fftshift(image_transformed, dim = (2, 3))
+
+        return image_shifted
     
 class SME(nn.Module):
     '''
@@ -394,17 +400,17 @@ class E2EVarNet(nn.Module):
         # Block 8
         current_kspace = current_kspace - self.dc8(current_kspace, ref, us_mask) + self.refinement8(current_kspace, sens_map_est)
 
-        # # Block 9
-        # current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
+        # Block 9
+        current_kspace = current_kspace - self.dc9(current_kspace, ref, us_mask) + self.refinement9(current_kspace, sens_map_est)
 
-        # # Block 10
-        # current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
+        # Block 10
+        current_kspace = current_kspace - self.dc10(current_kspace, ref, us_mask) + self.refinement10(current_kspace, sens_map_est)
 
-        # # Block 11
-        # current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
+        # Block 11
+        current_kspace = current_kspace - self.dc11(current_kspace, ref, us_mask) + self.refinement11(current_kspace, sens_map_est)
 
-        # # Block 12
-        # current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
+        # Block 12
+        current_kspace = current_kspace - self.dc12(current_kspace, ref, us_mask) + self.refinement12(current_kspace, sens_map_est)
 
         # Shift
         shifted = torch.fft.ifftshift(current_kspace, dim = (2, 3))

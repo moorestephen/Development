@@ -8,7 +8,8 @@ import torch.optim as optim
 import sys
 import data_preparation as dp
 import os
-from torch.utils.data import DataLoader
+import sys
+from torch.utils.data import DataLoader, ConcatDataset
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -20,78 +21,123 @@ if __name__ == "__main__":
     parser.add_argument('--num_epochs', type = int, help = 'Number of epochs')
     parser.add_argument('--optimizer_lr', type = float, default = 0.001, help = 'Adam optimizer learning rate')
     parser.add_argument('--batch_size', type = int, default = 32, help = 'Batch size to use during training')
+    parser.add_argument('--ratio_pathological', type = float, default = 0.0, help = 'Ratio of training and validation datasets which are pathological data')
 
     args = parser.parse_args()
 
-    # output_file = open(args.experiment_name + ".txt", 'w')
-    # sys.stdout = output_file
+print(f'Experiment name: {args.experiment_name}')
+print(f'Number of epochs: {args.num_epochs}')
+print(f'Initial Optimizer LR: {args.optimizer_lr}')
+print(f'Batch Size: {args.batch_size}')
+print(f'Ratio Pathological: {args.ratio_pathological}')
+print()
 
+# Device management
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {torch.cuda.get_device_name(device)}")
 
+# Model initialization and optimizer selection
 model = E2EVarNet(device)
 model.to(device)
 optimizer = optim.Adam(model.parameters(), lr = args.optimizer_lr)
+scheduler = torch.optim.lr_scheduler.MultiStepLR(
+    optimizer, milestones = [25], gamma = 0.1
+    # optimizer, milestones = [15, 30, 100], gamma = 0.5
+)
 torch.autograd.set_detect_anomaly(True) # To try to spit out when NaN comes in
 
+# Initialize ssim for loss
 ssim = StructuralSimilarityIndexMeasure().to(device)
-# ssim = SSIMLoss(spatial_dims = 2).to(device)
 
-
+# Random seeding
 np.random.seed(0)
 random.seed(0)
 torch.manual_seed(0)
 
-input_path = "/home/stephen.moore/MDSC508/Data/NormalData/Train_H5/slices"
-target_path = "/home/stephen.moore/MDSC508/Data/NormalData/Train_H5/target_slice_images"
-input_data = os.listdir(input_path)
-target_data = os.listdir(target_path)
+# Dataset preparation:
+#-----------------------------
 
-# Num patients in train/val/test subsets
-num_patients_train = 34
-num_patients_val = 6
-num_patients_test = 2
+healthy_input_path = "/home/stephen.moore/MDSC508/Data/NormalData/Train_H5/slices"
+healthy_target_path = "/home/stephen.moore/MDSC508/Data/NormalData/Train_H5/target_slice_images"
+healthy_input_data = os.listdir(healthy_input_path)
+healthy_target_data = os.listdir(healthy_target_path)
 
-patient_id_groups = dp.subset_data_by_patient_id(input_data)
-patient_ids = list(patient_id_groups.keys())
+# Max num vols in train/val subsets (healthy) --> determined by pathological dataset size
+max_num_healthy_vols_train = 48 
+max_num_healthy_vols_val = 12
 
-print(f"Total data available includes {len(input_data)} slices from {len(patient_ids)} patients")
+num_healthy_vols_train = int(max_num_healthy_vols_train * (1.0 - args.ratio_pathological))
+num_healthy_vols_val = int(max_num_healthy_vols_val * (1.0 - args.ratio_pathological))
 
-random.shuffle(patient_ids) # Shuffle patient ids for random distribution
+healthy_id_groups = dp.subset_data_by_patient_id(healthy_input_data)
+healthy_ids = list(healthy_id_groups.keys())
 
-if (num_patients_train + num_patients_val + num_patients_test <= len(patient_ids)):
-    train_ids = patient_ids[0:num_patients_train]
-    val_ids = patient_ids[(num_patients_train + 1):(num_patients_train + 1 + num_patients_val)]
-    test_ids = patient_ids[(num_patients_train + 1 + num_patients_val + 1):(num_patients_train + 1 + num_patients_val + 1+ num_patients_test)]
+random.shuffle(healthy_ids) # Shuffle patient ids for random distribution
+
+if (num_healthy_vols_train + num_healthy_vols_val <= len(healthy_ids)):
+    healthy_train_ids = healthy_ids[0:num_healthy_vols_train]
+    healthy_val_ids = healthy_ids[num_healthy_vols_train:(num_healthy_vols_train + num_healthy_vols_val)]
 else: 
     raise ValueError("Not enough patients for the number in split proposed")
 
+# Get train and validation designated healthy slices 
+healthy_train_slices = dp.get_slices_from_ids(healthy_train_ids, healthy_id_groups)
+random.shuffle(healthy_train_slices)
+healthy_val_slices = dp.get_slices_from_ids(healthy_val_ids, healthy_id_groups)
+random.shuffle(healthy_val_slices)
 
+healthy_train_ds = dp.MDSC508_Dataset(healthy_train_slices, healthy_input_path, healthy_target_path, healthy_input_data, healthy_target_data)
+healthy_val_ds = dp.MDSC508_Dataset(healthy_val_slices, healthy_input_path, healthy_target_path, healthy_input_data, healthy_target_data)
 
-# Get train, validation, and test designated slices 
-train_slices = dp.get_slices_from_ids(train_ids, patient_id_groups)
-random.shuffle(train_slices)
-val_slices = dp.get_slices_from_ids(val_ids, patient_id_groups)
-random.shuffle(val_slices)
-test_slices = dp.get_slices_from_ids(test_ids, patient_id_groups)
-random.shuffle(test_slices)
+print(f"Number of slices in healthy training subset: {len(healthy_train_ds)}")
+print(f"Number of slices in healthy validation subset: {len(healthy_val_ds)}")
 
-print(f"Number of slices in training subset: {len(train_slices)}")
-print(f"Number of slices in validation subset: {len(val_slices)}")
-print(f"Number of slices in test subset: {len(test_slices)}")
+# GBM dataset preparation:
+tvl_splits = {
+    'test': ['e17391s3_P10752', 'e17447s3_P13824', 'e17406s3_P01536', 'e17390s3_P03584', 
+    'e17322s3_P19968', 'e17353s3_P08704', 'e17474s3_P12288', 'e17315s3_P58368', 'e17647s3_P03584'],
+    'validate' : ['e17565s3_P30720', 'e17349s6_P15360', 'e17595s3_P19968', 'e17396s3_P13824', 
+    'e17614s3_P15872', 'e17410s3_P37888'],
+    'train' : ['e17573s3_P31232', 'e17757s3_P15360', 'e17385s3_P03584', 'e17448s3_P20992', 
+    'e17264s9_P25600', 'e17658s3_P03584', 'e17282s3_P28160', 'e17758s4_P22528', 'e17559s3_P24064', 
+    'e17346s3_P42496', 'e17660s3_P01536', 'e17600s3_P03584', 'e17786s3_P12800', 'e17785s3_P05632', 
+    'e17626s3_P12800', 'e17420s3_P07680', 'e17609s3_P27136', 'e17424s3_P10240', 'e17431s3_P23040', 
+    'e17638s3_P11776', 'e17756s3_P08704', 'e17480s3_P19968', 'e17553s3_P20480', 'e17307s3_P03584']
+}
 
-train_ds = dp.MDSC508_Dataset(train_slices, input_path, target_path, input_data, target_data)
-val_ds = dp.MDSC508_Dataset(val_slices, input_path, target_path, input_data, target_data)
-test_ds = dp.MDSC508_Dataset(test_slices, input_path, target_path, input_data, target_data)
+gbm_data_directory = '/home/stephen.moore/MDSC508/Data/PathologicalData'
+if args.ratio_pathological == 0.5:
+    patho_pull_ratio = 1.0
+elif args.ratio_pathological == 0.25:
+    patho_pull_ratio = 0.5
+elif args.ratio_pathological == 0.0:
+    patho_pull_ratio = 0.0
 
+if patho_pull_ratio != 0.0:
+    gbm_train_ds = dp.GBMDataset(gbm_data_directory, tvl_splits['train'], patho_pull_ratio)
+    gbm_val_ds = dp.GBMDataset(gbm_data_directory, tvl_splits['validate'], patho_pull_ratio)
+    
+    print(f'Number of slices in pathological training subset: {len(gbm_train_ds)}')
+    print(f'Number of slices in pathological validation subset: {len(gbm_val_ds)}')
+
+    train_ds = ConcatDataset([healthy_train_ds, gbm_train_ds])
+    val_ds = ConcatDataset([healthy_val_ds, gbm_val_ds])
+else:
+    train_ds = healthy_train_ds
+    val_ds = healthy_val_ds
+
+# Prepare for model training:
+#----------------------------
+
+# Setting training hyperparameters
 batch_size = args.batch_size
 epochs = args.num_epochs
+best_val_loss = 2.0
 patience = 10
-patience_track = 0
+current_patience = 0
 
 train_loader = DataLoader(train_ds, batch_size, shuffle = True)
 val_loader = DataLoader(val_ds, batch_size, shuffle = True)
-# test_loader = DataLoader(test_ds, batch_size, shuffle = True)
 
 training_losses = []
 validation_losses = []
@@ -111,16 +157,8 @@ for epoch in range(epochs):
         # Forward pass
         output = model(inputs)
 
-        # fig, axes = plt.subplots(nrows = 1, ncols = 2, figsize = (6, 8))
-        # axes[0].imshow(output[0, 0, :, :].cpu().detach().numpy(), cmap = 'gray')
-        # axes[1].imshow(target[0, 0, :, :].cpu().detach().numpy(), cmap = 'gray')
-        # plt.tight_layout()
-        # plt.show()
-
         # Calculate the loss
         loss = 1 - ssim(output, target)
-        # loss = -ssim(output, target)
-        # print(loss)
 
         # Backward pass and optimization
         loss.backward()
@@ -138,7 +176,7 @@ for epoch in range(epochs):
     with torch.no_grad():
         for i, batch in enumerate(val_loader, start = 0):
             inputs = batch['input'].to(device)
-            target = batch['target'].to(device) # Will probably need to change datatype
+            target = batch['target'].to(device) 
 
             # Forward pass
             outputs = model(inputs)
@@ -153,14 +191,27 @@ for epoch in range(epochs):
         val_loss /= i + 1
 
     # Print current epoch and losses
-    print(f'Epoch {epoch + 1}/{epochs} => Training Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}')
+    print(f'Epoch {epoch + 1} => Training Loss: {train_loss:.4f}, Validation Loss: {val_loss:.4f}')
 
     training_losses.append(train_loss)
     validation_losses.append(val_loss)
 
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        # current_patience = 0
+        torch.save(model, args.experiment_name + "_BEST_MODEL.pth")
+    # else:
+    #     current_patience += 1
+
+    # if current_patience >= patience:
+    #     print(f'Early stopping at epoch {epoch}')
+    #     break
+
+    scheduler.step()
+
 print(f'Finished training. Saving model ...')
 
-torch.save(model, args.experiment_name + ".pth")
+torch.save(model, args.experiment_name + "_COMPLETE.pth")
 
 plt.plot(range(1, epochs + 1), training_losses, label = 'Training Loss')
 plt.plot(range(1, epochs + 1), validation_losses, label = 'Validation Loss')

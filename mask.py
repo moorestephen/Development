@@ -25,12 +25,12 @@ def get_masked_indices():
     list = []
 
     for i in range(77):
-        if i % 2 == 0:
+        if i % 4 == 0:
             list.append(i)
     for i in range(77, 105):
         list.append(i)
     for i in range(105, 170):
-        if i % 2 == 0:
+        if i % 4 == 0:
             list.append(i)
     
     samples = np.array(list)
